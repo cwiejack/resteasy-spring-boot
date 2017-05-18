@@ -42,6 +42,7 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
     private static final String JAXRS_APP_CLASSES_PROPERTY_LEGACY = "resteasy.jaxrs.app";
 
     private Set<Class<? extends Application>> applications = new HashSet<Class<? extends Application>>();
+    private Set<ApplicationData> allApplications = new HashSet<ApplicationData>();
     private Set<Class<?>> allResources = new HashSet<Class<?>>();
     private Set<Class<?>> providers = new HashSet<Class<?>>();
 
@@ -54,18 +55,18 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
     /**
      * Find the JAX-RS application classes.
      * This is done by one of these three options in this order:
-     *
+     * <p>
      * 1- By having them defined as Spring beans
      * 2- By setting property {@code resteasy.jaxrs.app.classes} via Spring Boot application properties file.
-     *    This property should contain a comma separated list of JAX-RS sub-classes
+     * This property should contain a comma separated list of JAX-RS sub-classes
      * 3- Via classpath scanning (looking for javax.ws.rs.core.Application sub-classes)
-     *
+     * <p>
      * First try to find JAX-RS Application sub-classes defined as Spring beans. If that is existent,
      * the search stops, and those are the only JAX-RS applications to be registered.
      * If no JAX-RS application Spring beans are found, then see if Spring Boot property {@code resteasy.jaxrs.app.classes}
      * has been set. If it has, the search stops, and those are the only JAX-RS applications to be registered.
      * If not, then scan the classpath searching for JAX-RS applications.
-     *
+     * <p>
      * There is a way though to force one of the options above, which is by setting property
      * {@code resteasy.jaxrs.app.registration} via Spring Boot application properties file. The possible valid
      * values are {@code beans}, {@code property}, {@code scanning} or {@code auto}. If this property is not
@@ -82,8 +83,8 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
         switch (registration) {
             case AUTO:
                 findJaxrsApplicationBeans(beanFactory);
-                if(applications.size() == 0) findJaxrsApplicationProperty(beanFactory);
-                if(applications.size() == 0) findJaxrsApplicationScanning();
+                if (applications.size() == 0) findJaxrsApplicationProperty(beanFactory);
+                if (applications.size() == 0) findJaxrsApplicationScanning();
                 break;
             case BEANS:
                 findJaxrsApplicationBeans(beanFactory);
@@ -99,8 +100,8 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
                 break;
         }
 
-        for (Object appClass : applications.toArray()) {
-            logger.info("JAX-RS Application class found: {}", ((Class<Application>) appClass).getName());
+        for (ApplicationData appData : allApplications) {
+            logger.info("JAX-RS Application class found: {}", appData.getApplicationClass().getName());
         }
     }
 
@@ -109,13 +110,13 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
         String jaxrsAppClassesRegistration = configurableEnvironment.getProperty(JAXRS_APP_CLASSES_DEFINITION_PROPERTY);
         JaxrsAppClassesRegistration registration = JaxrsAppClassesRegistration.AUTO;
 
-        if(jaxrsAppClassesRegistration == null) {
+        if (jaxrsAppClassesRegistration == null) {
             logger.info("Property {} has not been set, JAX-RS Application classes registration is being set to AUTO", JAXRS_APP_CLASSES_DEFINITION_PROPERTY);
         } else {
             logger.info("Property {} has been set to {}", JAXRS_APP_CLASSES_DEFINITION_PROPERTY, jaxrsAppClassesRegistration);
             try {
                 registration = JaxrsAppClassesRegistration.valueOf(jaxrsAppClassesRegistration.toUpperCase());
-            } catch(IllegalArgumentException ex) {
+            } catch (IllegalArgumentException ex) {
                 String errorMesage = String.format("Property %s has not been properly set, value %s is invalid. JAX-RS Application classes registration is being set to AUTO.", JAXRS_APP_CLASSES_DEFINITION_PROPERTY, jaxrsAppClassesRegistration);
                 logger.error(errorMesage);
                 throw new IllegalArgumentException(errorMesage, ex);
@@ -135,13 +136,14 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
         logger.info("Searching for JAX-RS Application Spring beans");
 
         Map<String, Application> applicationBeans = beanFactory.getBeansOfType(Application.class, true, false);
-        if(applicationBeans == null || applicationBeans.size() == 0) {
+        if (applicationBeans == null || applicationBeans.size() == 0) {
             logger.info("No JAX-RS Application Spring beans found");
             return;
         }
 
         for (Application application : applicationBeans.values()) {
             applications.add(application.getClass());
+            allApplications.add(new ApplicationData(application));
         }
     }
 
@@ -151,9 +153,9 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
     private void findJaxrsApplicationProperty(ConfigurableListableBeanFactory beanFactory) {
         ConfigurableEnvironment configurableEnvironment = beanFactory.getBean(ConfigurableEnvironment.class);
         String jaxrsAppsProperty = configurableEnvironment.getProperty(JAXRS_APP_CLASSES_PROPERTY);
-        if(jaxrsAppsProperty == null) {
+        if (jaxrsAppsProperty == null) {
             jaxrsAppsProperty = configurableEnvironment.getProperty(JAXRS_APP_CLASSES_PROPERTY_LEGACY);
-            if(jaxrsAppsProperty == null) {
+            if (jaxrsAppsProperty == null) {
                 logger.info("No JAX-RS Application set via property {}", JAXRS_APP_CLASSES_PROPERTY);
                 return;
             }
@@ -164,16 +166,19 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
 
         String[] jaxrsClassNames = jaxrsAppsProperty.split(",");
 
-        for(String jaxrsClassName : jaxrsClassNames) {
+        for (String jaxrsClassName : jaxrsClassNames) {
             Class<? extends Application> jaxrsClass = null;
             try {
                 jaxrsClass = (Class<? extends Application>) Class.forName(jaxrsClassName.trim());
             } catch (ClassNotFoundException e) {
                 String exceptionMessage = String.format("JAX-RS Application class %s has not been found", jaxrsClassName.trim());
                 logger.error(exceptionMessage, e);
-                throw new BeansException(exceptionMessage, e){};
+                throw new BeansException(exceptionMessage, e) {
+                };
             }
             applications.add(jaxrsClass);
+
+            allApplications.add(new ApplicationData(jaxrsClass));
         }
     }
 
@@ -182,10 +187,15 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
      */
     private void findJaxrsApplicationScanning() {
         Set<Class<? extends Application>> applications = JaxrsApplicationScanner.getApplications();
-        if(applications == null || applications.size() == 0) {
+        if (applications == null || applications.size() == 0) {
             return;
         }
         this.applications.addAll(applications);
+
+        for (Class<? extends Application> application : applications) {
+            this.allApplications.add(new ApplicationData(application));
+        }
+
     }
 
     /**
@@ -201,25 +211,25 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
         String[] resourceBeans = beanFactory.getBeanNamesForAnnotation(Path.class);
         String[] providerBeans = beanFactory.getBeanNamesForAnnotation(Provider.class);
 
-        if(resourceBeans != null) {
-            for(String resourceBean : resourceBeans) {
+        if (resourceBeans != null) {
+            for (String resourceBean : resourceBeans) {
                 allResources.add(beanFactory.getType(resourceBean));
             }
         }
 
-        if(providerBeans != null) {
-            for(String providerBean : providerBeans) {
+        if (providerBeans != null) {
+            for (String providerBean : providerBeans) {
                 providers.add(beanFactory.getType(providerBean));
             }
         }
 
-        if(logger.isDebugEnabled()) {
+        if (logger.isDebugEnabled()) {
             for (Object resourceClass : allResources.toArray()) {
                 logger.debug("JAX-RS resource class found: {}", ((Class) resourceClass).getName());
             }
         }
-        if(logger.isDebugEnabled()) {
-            for (Object providerClass: providers.toArray()) {
+        if (logger.isDebugEnabled()) {
+            for (Object providerClass : providers.toArray()) {
                 logger.debug("JAX-RS provider class found: {}", ((Class) providerClass).getName());
             }
         }
@@ -244,17 +254,17 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
 
         BeanDefinitionRegistry registry = (BeanDefinitionRegistry) beanFactory;
 
-        for (Class<? extends Application> applicationClass : applications) {
-            ApplicationPath path = AnnotationUtils.findAnnotation(applicationClass, ApplicationPath.class);
+        for (ApplicationData appData : allApplications) {
+            ApplicationPath path = AnnotationUtils.findAnnotation(appData.getApplicationClass(), ApplicationPath.class);
             if (path == null) {
-                logger.warn("JAX-RS Application class {} has no ApplicationPath annotation, so it will not be registered", applicationClass.getName());
+                logger.warn("JAX-RS Application class {} has no ApplicationPath annotation, so it will not be registered", appData.getApplicationClass().getName());
                 continue;
             }
 
-            logger.debug("registering JAX-RS application class " + applicationClass.getName());
+            logger.debug("registering JAX-RS application class " + appData.getApplicationClass().getName());
 
-            GenericBeanDefinition applicationServletBean = createApplicationServlet(applicationClass, path.value());
-            registry.registerBeanDefinition(applicationClass.getName(), applicationServletBean);
+            GenericBeanDefinition applicationServletBean = createApplicationServlet(appData, path.value());
+            registry.registerBeanDefinition(appData.getApplicationClass().getName(), applicationServletBean);
         }
 
     }
@@ -267,28 +277,32 @@ public class ResteasyEmbeddedServletInitializer implements BeanFactoryPostProces
      */
     private void registerDefaultJaxrsApp(ConfigurableListableBeanFactory beanFactory) {
         BeanDefinitionRegistry registry = (BeanDefinitionRegistry) beanFactory;
-        GenericBeanDefinition applicationServletBean = createApplicationServlet(Application.class, "/");
+        GenericBeanDefinition applicationServletBean = createApplicationServlet(new ApplicationData(Application.class), "/");
         registry.registerBeanDefinition(Application.class.getName(), applicationServletBean);
     }
 
     /**
      * Creates a Servlet bean definition for the given JAX-RS application
      *
-     * @param applicationClass
+     * @param applicationData
      * @param path
      * @return a Servlet bean definition for the given JAX-RS application
      */
-    private GenericBeanDefinition createApplicationServlet(Class<? extends Application> applicationClass, String path) {
+    private GenericBeanDefinition createApplicationServlet(ApplicationData applicationData, String path) {
         GenericBeanDefinition applicationServletBean = new GenericBeanDefinition();
         applicationServletBean.setFactoryBeanName(ResteasyApplicationBuilder.BEAN_NAME);
         applicationServletBean.setFactoryMethodName("build");
 
         Set<Class<?>> resources = allResources;
 
+        for (Class<?> resource : resources) {
+            applicationData.applyResource(resource);
+        }
+
         ConstructorArgumentValues values = new ConstructorArgumentValues();
-        values.addIndexedArgumentValue(0, applicationClass.getName());
+        values.addIndexedArgumentValue(0, applicationData.getApplicationClass().getName());
         values.addIndexedArgumentValue(1, path);
-        values.addIndexedArgumentValue(2, resources);
+        values.addIndexedArgumentValue(2, applicationData.getResources());
         values.addIndexedArgumentValue(3, providers);
         applicationServletBean.setConstructorArgumentValues(values);
 
